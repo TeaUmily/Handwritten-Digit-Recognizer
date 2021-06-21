@@ -121,7 +121,7 @@ class MainActivity : AppCompatActivity() {
         values.forEachIndexed { index, value ->
             map["Col${index + 1}"] = value
         }
-        map["Col65"] = 0
+
         val requestData = ClassificationRequestData(Inputs(listOf(map)))
 
         if (isNetworkConnected()) {
