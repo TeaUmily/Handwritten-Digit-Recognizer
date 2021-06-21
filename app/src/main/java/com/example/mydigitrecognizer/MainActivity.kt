@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Color
-import android.graphics.Matrix
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -24,11 +22,12 @@ import androidx.camera.core.AspectRatio.RATIO_4_3
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import com.bumptech.glide.Glide
 import com.example.mydigitrecognizer.api.RepositoryRetriever
 import com.example.mydigitrecognizer.model.ClassificationRequestData
 import com.example.mydigitrecognizer.model.Inputs
+import com.example.mydigitrecognizer.utils.rotateBitmap
+import com.example.mydigitrecognizer.utils.toSquare
 import kotlinx.android.synthetic.main.activity_main.*
 import retrofit2.Call
 import java.io.File
@@ -49,21 +48,7 @@ class MainActivity : AppCompatActivity() {
     private var buttonState = ButtonState.TAKE_PHOTO
     private val repoRetriever = RepositoryRetriever()
 
-    private val callback = object : Callback<ResponseResult> {
-        override fun onFailure(call: Call<ResponseResult>?, t:Throwable?) {
-            Log.e("MainActivity", "Problem calling Github API {${t?.message}}")
-        }
-
-        override fun onResponse(call: Call<ResponseResult>?, response: Response<ResponseResult>?) {
-            response?.isSuccessful.let {
-                val resultList = response?.body()?.results?.output ?: emptyList()
-                Toast.makeText(this@MainActivity, "Recognized number: ${resultList[0].recognizedNumber}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-
-        @RequiresApi(Build.VERSION_CODES.Q)
+    @RequiresApi(Build.VERSION_CODES.Q)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -71,92 +56,12 @@ class MainActivity : AppCompatActivity() {
         requestCameraPermission()
 
         btnTakePicture.setOnClickListener {
-            if(buttonState == ButtonState.ANALYZE_PHOTO && currentPhotoFile != null) {
-
-                val originalBitmap = BitmapFactory.decodeFile(currentPhotoFile!!.absolutePath)
-
-                val matrix = Matrix()
-
-                matrix.postRotate(90f)
-
-                val bmOriginal = Bitmap.createBitmap(
-                    originalBitmap,
-                    0,
-                    0,
-                    originalBitmap.width,
-                    originalBitmap.height,
-                    matrix,
-                    true
-                )
-
-                Glide.with(baseContext)
-                    .load(bmOriginal)
-                    .into(imageView)
-                val squareB = bmOriginal.toSquare()
-                if(squareB != null) {
-                    val b = Bitmap.createScaledBitmap(squareB, 32, 32, true)
-                    b.density = 32
-
-                    var intArray = IntArray(b.width * b.height)
-
-
-                    b.getPixels(intArray, 0, b.width, 0, 0, b.width, b.height)
-
-                    val d = Bitmap.createBitmap(b.width, b.height, Bitmap.Config.RGB_565)
-
-
-                    val array2 = Array(32) { IntArray(32) }
-                    for (i in 0 until b.width) {
-                        for (x in 0 until b.height) {
-                            val oc = b.getColor(i, x)
-                            val grayScale = if( (oc.red()+oc.green()+oc.blue()) / 3 <= 0.5) {
-                                0f
-                            } else {
-                                1f
-                            }
-                            array2[i][x] = grayScale.toInt()
-                            d.setPixel(i, x, Color.rgb(grayScale, grayScale, grayScale))
-                        }
-                    }
-
-                    val array = mutableListOf<Int>()
-
-                    for(i in 0 until 32 step 4){
-                        for (j in 0 until 32 step 4){
-                            array.add(getInfoNumber(j, i, array2))
-                        }
-                    }
-
-                    d.getPixels(intArray, 0, d.width, 0, 0, d.width, d.height)
-
-                    Log.e("MOJE POLJE", array.subList(0,8).toString())
-                    Log.e("MOJE POLJE", array.subList(8,16).toString())
-                    Log.e("MOJE POLJE", array.subList(16,24).toString())
-                    Log.e("MOJE POLJE", array.subList(24,32).toString())
-                    Log.e("MOJE POLJE", array.subList(32,40).toString())
-                    Log.e("MOJE POLJE", array.subList(40,48).toString())
-                    Log.e("MOJE POLJE", array.subList(48,56).toString())
-                    Log.e("MOJE POLJE", array.subList(56,64).toString())
-
-                    val map = mutableMapOf<String, Int>()
-                    array.forEachIndexed { index, value ->
-                        map["Col${index+1}"] = value
-                    }
-                    map["Col65"] = 0
-                    val requestData = ClassificationRequestData(Inputs(listOf(map)))
-
-                    if (isNetworkConnected()) {
-                        repoRetriever.getClassificationResult(requestData, callback)
-                    } else {
-                        AlertDialog.Builder(this).setTitle("No Internet Connection")
-                            .setMessage("Please check your internet connection and try again")
-                            .setPositiveButton(android.R.string.ok) { _, _ -> }
-                            .setIcon(android.R.drawable.ic_dialog_alert).show()
-                    }
+            if (buttonState == ButtonState.ANALYZE_PHOTO && currentPhotoFile != null) {
+                currentPhotoFile?.apply {
+                    makeNetworkRequest(getTransformedBitmapData(this))
                 }
-
             } else {
-                if(currentPhotoFile == null) {
+                if (currentPhotoFile == null) {
                     takePhoto()
                     buttonState = ButtonState.ANALYZE_PHOTO
                 }
@@ -165,7 +70,8 @@ class MainActivity : AppCompatActivity() {
 
         btnRepeat.setOnClickListener {
             buttonState = ButtonState.TAKE_PHOTO
-            btnTakePicture.background = ContextCompat.getDrawable(baseContext, R.drawable.ic_take_photo)
+            btnTakePicture.background =
+                ContextCompat.getDrawable(baseContext, R.drawable.ic_take_photo)
             currentPhotoFile?.delete()
             currentPhotoFile = null
             imageView.visibility = View.GONE
@@ -175,20 +81,96 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
+    private fun getTransformedBitmapData(photoFile: File): List<Int> {
+        val originalBitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
+        val rotatedBitmap = rotateBitmap(originalBitmap)
+        val squaredBitmap = rotatedBitmap.toSquare()
+
+        /** Scale bitmap to fit 32x32 array requirements */
+        val scaledBitmap = Bitmap.createScaledBitmap(squaredBitmap, 32, 32, true)
+        scaledBitmap.density = 32
+        /** Transform bitmap color values to 0 or 1 depending on the grayscale
+         * and save them to newly created array */
+        val bitmapValuesArray = Array(32) { IntArray(32) }
+        for (i in 0 until scaledBitmap.width) {
+            for (x in 0 until scaledBitmap.height) {
+                val color = scaledBitmap.getColor(i, x)
+                val grayScale = if ((color.red() + color.green() + color.blue()) / 3 <= 0.5) {
+                    0
+                } else {
+                    1
+                }
+                bitmapValuesArray[i][x] = grayScale
+            }
+        }
+
+        /** Shrink values array to fit 8x8 array requirements and save it to list */
+        val compressedValuesArray = mutableListOf<Int>()
+        for (i in 0 until 32 step 4) {
+            for (j in 0 until 32 step 4) {
+                compressedValuesArray.add(getRepresentativeNumber(j, i, bitmapValuesArray))
+            }
+        }
+
+        /** Return transformed file */
+        return compressedValuesArray
+    }
+
+    private fun makeNetworkRequest(values: List<Int>) {
+        val map = mutableMapOf<String, Int>()
+        values.forEachIndexed { index, value ->
+            map["Col${index + 1}"] = value
+        }
+        map["Col65"] = 0
+        val requestData = ClassificationRequestData(Inputs(listOf(map)))
+
+        if (isNetworkConnected()) {
+            repoRetriever.getClassificationResult(requestData, provideNetworkCallback())
+        } else {
+            AlertDialog.Builder(this).setTitle("No Internet Connection")
+                .setMessage("Please check your internet connection and try again")
+                .setPositiveButton(android.R.string.ok) { _, _ -> }
+                .setIcon(android.R.drawable.ic_dialog_alert).show()
+        }
+    }
+
+    private fun provideNetworkCallback() = object : Callback<ResponseResult> {
+        override fun onFailure(call: Call<ResponseResult>?, t: Throwable?) {
+            Log.e("MainActivity", "Problem calling Azure API {${t?.message}}")
+        }
+
+        override fun onResponse(call: Call<ResponseResult>?, response: Response<ResponseResult>?) {
+            response?.isSuccessful.let {
+                val resultList = response?.body()?.results?.output ?: emptyList()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Recognized number: ${resultList[0].recognizedNumber}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+
     private fun isNetworkConnected(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val activeNetwork = connectivityManager.activeNetwork
         val networkCapabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
         return networkCapabilities != null &&
                 networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
-    private fun getInfoNumber(startIndexRow: Int, startIndexColumn: Int, bitmap: Array<IntArray>) : Int {
+    private fun getRepresentativeNumber(
+        startIndexRow: Int,
+        startIndexColumn: Int,
+        bitmap: Array<IntArray>
+    ): Int {
         var sum = 0
-        for(i in startIndexRow until startIndexRow + 4){
-            for (j in startIndexColumn until startIndexColumn + 4){
+        for (i in startIndexRow until startIndexRow + 4) {
+            for (j in startIndexColumn until startIndexColumn + 4) {
                 val p = bitmap[i][j]
-                if(p == 0) {
+                if (p == 0) {
                     sum++
                 }
             }
@@ -196,26 +178,13 @@ class MainActivity : AppCompatActivity() {
         return sum
     }
 
-    private fun Bitmap.toSquare(): Bitmap? {
-        val side = kotlin.math.min(width, height)
-        val xOffset = (width - side)/2
-        val yOffset = (height - side)/2
-
-        return Bitmap.createBitmap(
-            this,
-            xOffset,
-            yOffset,
-            side,
-            side
-        )
-    }
-
     private fun requestCameraPermission() {
         if (allPermissionsGranted()) {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(
-                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+            )
         }
     }
 
@@ -223,11 +192,15 @@ class MainActivity : AppCompatActivity() {
         val imageCapture = imageCapture ?: return
         val photoFile = File(
             outputDirectory,
-            SimpleDateFormat(FILENAME_FORMAT, Locale.US
-            ).format(System.currentTimeMillis()) + ".jpg")
+            SimpleDateFormat(
+                FILENAME_FORMAT, Locale.US
+            ).format(System.currentTimeMillis()) + ".jpg"
+        )
         val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
         imageCapture.takePicture(
-            outputOptions, ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageSavedCallback {
+            outputOptions,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageSavedCallback {
                 override fun onError(exc: ImageCaptureException) {
                     Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
                 }
@@ -239,7 +212,8 @@ class MainActivity : AppCompatActivity() {
                     Glide.with(this@MainActivity)
                         .load(savedUri)
                         .into(imageView)
-                    btnTakePicture.background = ContextCompat.getDrawable(baseContext, R.drawable.ic_done)
+                    btnTakePicture.background =
+                        ContextCompat.getDrawable(baseContext, R.drawable.ic_done)
                 }
             })
     }
@@ -263,9 +237,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture)
-                //camera.cameraControl.enableTorch(true)
-            } catch(exc: Exception) {
+                    this, cameraSelector, preview, imageCapture
+                )
+            } catch (exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
             }
 
@@ -274,12 +248,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(
-            baseContext, it) == PackageManager.PERMISSION_GRANTED
+            baseContext, it
+        ) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun getOutputDirectory(): File {
         val mediaDir = externalMediaDirs.firstOrNull()?.let {
-            File(it, resources.getString(R.string.app_name)).apply { mkdirs() } }
+            File(it, resources.getString(R.string.app_name)).apply { mkdirs() }
+        }
         return if (mediaDir != null && mediaDir.exists())
             mediaDir else filesDir
     }
@@ -294,9 +270,11 @@ class MainActivity : AppCompatActivity() {
             if (allPermissionsGranted()) {
                 startCamera()
             } else {
-                Toast.makeText(this,
+                Toast.makeText(
+                    this,
                     "Permissions not granted by the user.",
-                    Toast.LENGTH_SHORT).show()
+                    Toast.LENGTH_SHORT
+                ).show()
                 finish()
             }
         }
